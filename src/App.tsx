@@ -32,7 +32,12 @@ function readLocalProgress(): { progress: PlayerProgress; warning: string | null
 }
 
 function App() {
-  const [isVkApp] = useState(() => bridge.isEmbedded());
+  const [isVkApp] = useState(() => {
+    if (bridge.isWebView()) return true;
+
+    const platform = new URLSearchParams(window.location.search).get("vk_platform");
+    return bridge.isIframe() && platform?.startsWith("desktop_") === true;
+  });
   const [localSave] = useState(readLocalProgress);
   const [progress, setProgress] = useState(localSave.progress);
   const [progressLoaded, setProgressLoaded] = useState(!isVkApp);
