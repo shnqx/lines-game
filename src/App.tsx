@@ -230,7 +230,7 @@ function App() {
             <i />
             <i />
           </span>
-          <span>тише</span>
+          <span>распутай нити</span>
         </a>
         <div className="topbar-note"><span className="status-dot" /> тихая головоломка</div>
         <div className="currency-balance" aria-label={`Монеты: ${progress.coins}`}>✦ {progress.coins}</div>
