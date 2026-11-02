@@ -14,6 +14,7 @@ import {
 const viewWidth = 1000;
 const viewHeight = 680;
 const progressKey = "rasputay-niti-progress";
+const vkStartupTimeout = 5000;
 
 function readLocalProgress(): { progress: PlayerProgress; warning: string | null } {
   try {
@@ -35,6 +36,7 @@ function App() {
   const [localSave] = useState(readLocalProgress);
   const [progress, setProgress] = useState(localSave.progress);
   const [progressLoaded, setProgressLoaded] = useState(!isVkApp);
+  const [vkStorageReady, setVkStorageReady] = useState(!isVkApp);
   const [storageWarning, setStorageWarning] = useState(localSave.warning);
   const [notice, setNotice] = useState("");
   const [isWatchingAd, setIsWatchingAd] = useState(false);
@@ -59,10 +61,19 @@ function App() {
     if (!isVkApp) return;
 
     let cancelled = false;
+    let timedOut = false;
+    const timeoutId = window.setTimeout(() => {
+      timedOut = true;
+      setStorageWarning("Прогресс VK недоступен. Игра продолжит работу с сохранением устройства.");
+      setProgressLoaded(true);
+    }, vkStartupTimeout);
+
     const loadVkProgress = async () => {
       try {
         await bridge.send("VKWebAppInit");
+        if (cancelled || timedOut) return;
         const response = await bridge.send("VKWebAppStorageGet", { keys: [progressKey] });
+        if (cancelled || timedOut) return;
         const savedValue = response.keys.find((item) => item.key === progressKey)?.value;
         if (!cancelled && savedValue) {
           const savedProgress = parseProgress(savedValue);
@@ -70,19 +81,25 @@ function App() {
           setLevelIndex(savedProgress.unlockedLevel);
           setPositions(generateLevel(savedProgress.unlockedLevel).initialLayout);
         }
+        if (!cancelled) {
+          setVkStorageReady(true);
+          setStorageWarning(null);
+        }
       } catch (error) {
         console.error("Не удалось синхронизировать прогресс VK.", error);
-        if (!cancelled) {
+        if (!cancelled && !timedOut) {
           setStorageWarning("Прогресс VK недоступен. Игра продолжится с сохранением устройства.");
         }
       } finally {
-        if (!cancelled) setProgressLoaded(true);
+        window.clearTimeout(timeoutId);
+        if (!cancelled && !timedOut) setProgressLoaded(true);
       }
     };
 
     void loadVkProgress();
     return () => {
       cancelled = true;
+      window.clearTimeout(timeoutId);
     };
   }, [isVkApp]);
 
@@ -91,13 +108,12 @@ function App() {
 
     try {
       window.localStorage.setItem(progressKey, JSON.stringify(progress));
-      setStorageWarning(null);
     } catch (error) {
       console.error("Не удалось сохранить прогресс на устройстве.", error);
       setStorageWarning("Не удалось сохранить прогресс на этом устройстве.");
     }
 
-    if (isVkApp) {
+    if (isVkApp && vkStorageReady) {
       void bridge
         .send("VKWebAppStorageSet", { key: progressKey, value: JSON.stringify(progress) })
         .then(() => setStorageWarning(null))
@@ -106,7 +122,7 @@ function App() {
           setStorageWarning("Не удалось синхронизировать прогресс с VK.");
         });
     }
-  }, [isVkApp, progress, progressLoaded]);
+  }, [isVkApp, progress, progressLoaded, vkStorageReady]);
 
   useEffect(() => {
     if (!progressLoaded || !solved || rewardedLevel.current === levelIndex) return;
@@ -216,10 +232,6 @@ function App() {
       setIsWatchingAd(false);
     }
   };
-
-  if (!progressLoaded) {
-    return <main className="app-shell loading-screen">Загружаем прогресс…</main>;
-  }
 
   return (
     <main className="app-shell">
