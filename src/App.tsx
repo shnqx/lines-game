@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import bridge from "@vkontakte/vk-bridge";
+import { initializeVkBridge, isVkEnvironment, vkRequestTimeout, withVkTimeout } from "./vkBridge";
 import { countCrossings, getCrossingEdgeIds, type Point } from "./game/geometry";
 import { generateLevel } from "./game/generateLevel";
 import {
@@ -14,7 +15,6 @@ import {
 const viewWidth = 1000;
 const viewHeight = 680;
 const progressKey = "rasputay-niti-progress";
-const vkStartupTimeout = 5000;
 
 function readLocalProgress(): { progress: PlayerProgress; warning: string | null } {
   try {
@@ -32,12 +32,7 @@ function readLocalProgress(): { progress: PlayerProgress; warning: string | null
 }
 
 function App() {
-  const [isVkApp] = useState(() => {
-    if (bridge.isWebView()) return true;
-
-    const platform = new URLSearchParams(window.location.search).get("vk_platform");
-    return bridge.isIframe() && platform?.startsWith("desktop_") === true;
-  });
+  const [isVkApp] = useState(isVkEnvironment);
   const [localSave] = useState(readLocalProgress);
   const [progress, setProgress] = useState(localSave.progress);
   const [progressLoaded, setProgressLoaded] = useState(!isVkApp);
@@ -69,15 +64,29 @@ function App() {
     let timedOut = false;
     const timeoutId = window.setTimeout(() => {
       timedOut = true;
+      console.warn(
+        "[VK] Запуск VK или загрузка Storage превысили тайм-аут. Используется локальный режим.",
+      );
       setStorageWarning("Прогресс VK недоступен. Игра продолжит работу с сохранением устройства.");
       setProgressLoaded(true);
-    }, vkStartupTimeout);
+    }, vkRequestTimeout);
 
     const loadVkProgress = async () => {
+      let storageLoading = false;
       try {
-        await bridge.send("VKWebAppInit");
+        const initialized = await initializeVkBridge();
         if (cancelled || timedOut) return;
-        const response = await bridge.send("VKWebAppStorageGet", { keys: [progressKey] });
+        if (!initialized) {
+          setStorageWarning("VK недоступен. Игра продолжит работу с сохранением устройства.");
+          return;
+        }
+
+        storageLoading = true;
+        console.info("[VK] Начинается загрузка сохранения из VK Storage.");
+        const response = await withVkTimeout(
+          bridge.send("VKWebAppStorageGet", { keys: [progressKey] }),
+          "VKWebAppStorageGet",
+        );
         if (cancelled || timedOut) return;
         const savedValue = response.keys.find((item) => item.key === progressKey)?.value;
         if (!cancelled && savedValue) {
@@ -87,11 +96,17 @@ function App() {
           setPositions(generateLevel(savedProgress.unlockedLevel).initialLayout);
         }
         if (!cancelled) {
+          console.info("[VK] Сохранение успешно загружено из VK Storage.");
           setVkStorageReady(true);
           setStorageWarning(null);
         }
       } catch (error) {
-        console.error("Не удалось синхронизировать прогресс VK.", error);
+        if (storageLoading) {
+          console.error(
+            "[VK] Ошибка загрузки VK Storage. Используется локальное сохранение.",
+            error instanceof Error ? error.name : "Unknown error",
+          );
+        }
         if (!cancelled && !timedOut) {
           setStorageWarning("Прогресс VK недоступен. Игра продолжится с сохранением устройства.");
         }
@@ -119,11 +134,17 @@ function App() {
     }
 
     if (isVkApp && vkStorageReady) {
-      void bridge
-        .send("VKWebAppStorageSet", { key: progressKey, value: JSON.stringify(progress) })
+      console.info("[VK] Начинается сохранение прогресса в VK Storage.");
+      void withVkTimeout(
+        bridge.send("VKWebAppStorageSet", { key: progressKey, value: JSON.stringify(progress) }),
+        "VKWebAppStorageSet",
+      )
         .then(() => setStorageWarning(null))
         .catch((error: unknown) => {
-          console.error("Не удалось записать прогресс в VK.", error);
+          console.error(
+            "[VK] Ошибка сохранения прогресса в VK Storage.",
+            error instanceof Error ? error.name : "Unknown error",
+          );
           setStorageWarning("Не удалось синхронизировать прогресс с VK.");
         });
     }
@@ -221,17 +242,26 @@ function App() {
     setIsWatchingAd(true);
     setNotice("");
     try {
-      const availability = await bridge.send("VKWebAppCheckNativeAds", { ad_format: "reward" });
+      const availability = await withVkTimeout(
+        bridge.send("VKWebAppCheckNativeAds", { ad_format: "reward" }),
+        "VKWebAppCheckNativeAds",
+      );
       if (!availability.result) {
         setNotice("Сейчас нет доступного видео. Попробуйте позже.");
         return;
       }
 
-      await bridge.send("VKWebAppShowNativeAds", { ad_format: "reward" });
+      await withVkTimeout(
+        bridge.send("VKWebAppShowNativeAds", { ad_format: "reward" }),
+        "VKWebAppShowNativeAds",
+      );
       setProgress((current) => ({ ...current, coins: current.coins + rewardedAdCoins }));
       setNotice(`За просмотр начислено +${rewardedAdCoins} ✦`);
     } catch (error) {
-      console.error("Не удалось показать rewarded-рекламу VK.", error);
+      console.error(
+        "[VK] Ошибка rewarded-рекламы.",
+        error instanceof Error ? error.name : "Unknown error",
+      );
       setNotice("Не удалось запустить видео. Монеты не начислены.");
     } finally {
       setIsWatchingAd(false);
