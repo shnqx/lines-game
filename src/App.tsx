@@ -22,6 +22,25 @@ const viewWidth = 1000;
 const viewHeight = 680;
 const progressKey = "rasputay-niti-progress";
 
+function getRopeStrandPath(x1: number, y1: number, x2: number, y2: number) {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const length = Math.hypot(dx, dy);
+  if (length === 0) return "";
+
+  const normalX = -dy / length;
+  const normalY = dx / length;
+  const steps = Math.max(1, Math.ceil(length / 8));
+  const amplitude = 2.1;
+  const points = Array.from({ length: steps + 1 }, (_, step) => {
+    const progress = step / steps;
+    const offset = (step % 2 === 0 ? -1 : 1) * amplitude;
+    return `${x1 + dx * progress + normalX * offset},${y1 + dy * progress + normalY * offset}`;
+  });
+
+  return `M ${points.join(" L ")}`;
+}
+
 function readLocalProgress(): { progress: PlayerProgress; warning: string | null } {
   try {
     return {
@@ -316,20 +335,40 @@ function App() {
                 <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
               </filter>
             </defs>
-            {level.edges.map((edge, index) => {
+            {level.edges.map((edge) => {
               const from = positions[edge.from];
               const to = positions[edge.to];
               const crossed = crossingEdges.has(edge.id);
               return (
-                <line
+                <g
                   key={edge.id}
-                  x1={from.x * viewWidth}
-                  y1={from.y * viewHeight}
-                  x2={to.x * viewWidth}
-                  y2={to.y * viewHeight}
-                  className={`thread thread-${index % 3}${crossed ? " crossed" : ""}`}
+                  className={`thread${crossed ? " crossed" : ""}`}
                   filter={crossed ? "url(#soft-glow)" : undefined}
-                />
+                >
+                  <line
+                    x1={from.x * viewWidth}
+                    y1={from.y * viewHeight}
+                    x2={to.x * viewWidth}
+                    y2={to.y * viewHeight}
+                    className="thread-outline"
+                  />
+                  <line
+                    x1={from.x * viewWidth}
+                    y1={from.y * viewHeight}
+                    x2={to.x * viewWidth}
+                    y2={to.y * viewHeight}
+                    className="thread-core"
+                  />
+                  <path
+                    d={getRopeStrandPath(
+                      from.x * viewWidth,
+                      from.y * viewHeight,
+                      to.x * viewWidth,
+                      to.y * viewHeight,
+                    )}
+                    className="thread-braid"
+                  />
+                </g>
               );
             })}
             {positions.map((point, index) => (
@@ -369,6 +408,14 @@ function App() {
                   setMoves((current) => current + 1);
                 }}
               >
+                {activeNode === index && (
+                  <circle
+                    cx={point.x * viewWidth}
+                    cy={point.y * viewHeight}
+                    r="21"
+                    className="node-focus-ring"
+                  />
+                )}
                 <circle cx={point.x * viewWidth} cy={point.y * viewHeight} r="25" className="node-hit" />
                 <circle cx={point.x * viewWidth} cy={point.y * viewHeight} r="11" className="node-shadow" />
                 <circle cx={point.x * viewWidth} cy={point.y * viewHeight} r="8" className="node-core" />

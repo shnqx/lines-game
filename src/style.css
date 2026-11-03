@@ -72,14 +72,16 @@ h1 em { color: #c9a580; font-family: Georgia, serif; font-weight: 500; letter-sp
 .crossing-count.clear { color: #a7bba8; }
 .crossing-indicator { width: 5px; height: 5px; border-radius: 50%; background: currentColor; box-shadow: 0 0 9px currentColor; }
 .puzzle-board { display: block; width: 100%; aspect-ratio: 1.58; touch-action: none; }
-.thread { fill: none; stroke-width: 2.4; stroke-linecap: round; opacity: .8; transition: stroke .25s ease, opacity .25s ease; }
-.thread-0 { stroke: #cba77e; }
-.thread-1 { stroke: #8aa59b; }
-.thread-2 { stroke: #a69ab8; }
-.thread.crossed { stroke: #d98774; opacity: 1; stroke-width: 2.8; }
+.thread { fill: none; opacity: .95; transition: opacity .25s ease; }
+.thread-outline { stroke: #11151a; stroke-width: 9; stroke-linecap: round; }
+.thread-core { stroke: #42bd78; stroke-width: 5.5; stroke-linecap: round; transition: stroke .25s ease; }
+.thread-braid { stroke: #b6f2c8a8; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.thread.crossed .thread-core { stroke: #f05e58; }
+.thread.crossed .thread-braid { stroke: #ffd1c9b8; }
 .node { cursor: grab; }
 .node.dragging { cursor: grabbing; }
 .node-hit { fill: transparent; }
+.node-focus-ring { fill: #d7f7e326; stroke: #bcf2d2b8; stroke-width: 2; filter: drop-shadow(0 0 11px #8ce8b6cc); }
 .node-shadow { fill: #101116; stroke: #fff3; stroke-width: 1; }
 .node-core { fill: #e6d0b1; stroke: #fff8e9; stroke-width: 1.5; filter: drop-shadow(0 0 7px #d9b78c77); }
 .node-shine { fill: white; opacity: .9; pointer-events: none; }
