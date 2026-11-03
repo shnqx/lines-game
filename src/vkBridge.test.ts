@@ -14,7 +14,12 @@ vi.mock("@vkontakte/vk-bridge", () => ({
   },
 }));
 
-import { initializeVkBridge, isVkEnvironment, withVkTimeout } from "./vkBridge";
+import {
+  getVkUserId,
+  initializeVkBridge,
+  isVkEnvironment,
+  withVkTimeout,
+} from "./vkBridge";
 
 describe("VK Bridge startup", () => {
   beforeEach(() => {
@@ -38,7 +43,13 @@ describe("VK Bridge startup", () => {
     isIframeMock.mockReturnValue(true);
 
     expect(isVkEnvironment("")).toBe(true);
-    expect(isWebViewMock).toHaveBeenCalledOnce();
+    expect(isIframeMock).toHaveBeenCalledOnce();
+  });
+
+  it("recognizes launch parameters in a route hash without modifying the URL", () => {
+    expect(isVkEnvironment("", "#/level?vk_platform=desktop_web")).toBe(true);
+    expect(getVkUserId("", "#/level?vk_user_id=456")).toBe("456");
+    expect(getVkUserId("?vk_app_id=123")).toBeNull();
   });
 
   it("initializes the bridge only once for repeated callers", async () => {
@@ -70,5 +81,18 @@ describe("VK Bridge startup", () => {
 
     await vi.advanceTimersByTimeAsync(5000);
     await rejection;
+  });
+
+  it("shares the same VK Storage read for repeated callers", async () => {
+    vi.resetModules();
+    sendMock.mockResolvedValueOnce({ keys: [{ key: "progress", value: "saved" }] });
+    const { getVkStorageValue: getStorageValue } = await import("./vkBridge");
+
+    await expect(Promise.all([
+      getStorageValue("progress"),
+      getStorageValue("progress"),
+    ])).resolves.toEqual(["saved", "saved"]);
+    expect(sendMock).toHaveBeenCalledOnce();
+    expect(sendMock).toHaveBeenCalledWith("VKWebAppStorageGet", { keys: ["progress"] });
   });
 });

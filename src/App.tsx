@@ -1,6 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import bridge from "@vkontakte/vk-bridge";
-import { initializeVkBridge, isVkEnvironment, vkRequestTimeout, withVkTimeout } from "./vkBridge";
+import {
+  getVkBridgeInitialization,
+  getVkStorageValue,
+  isVkEnvironment,
+  setVkStorageValue,
+  withVkTimeout,
+} from "./vkBridge";
 import { countCrossings, getCrossingEdgeIds, type Point } from "./game/geometry";
 import { generateLevel } from "./game/generateLevel";
 import {
@@ -35,7 +41,6 @@ function App() {
   const [isVkApp] = useState(isVkEnvironment);
   const [localSave] = useState(readLocalProgress);
   const [progress, setProgress] = useState(localSave.progress);
-  const [progressLoaded, setProgressLoaded] = useState(!isVkApp);
   const [vkStorageReady, setVkStorageReady] = useState(!isVkApp);
   const [storageWarning, setStorageWarning] = useState(localSave.warning);
   const [notice, setNotice] = useState("");
@@ -46,6 +51,8 @@ function App() {
   const [activeNode, setActiveNode] = useState<number | null>(null);
   const [moves, setMoves] = useState(0);
   const rewardedLevel = useRef<number | null>(null);
+  const progressChangedBeforeStorageLoad = useRef(false);
+  const gameChangedBeforeStorageLoad = useRef(false);
   const crossings = countCrossings(level.edges, positions);
   const crossingEdges = getCrossingEdgeIds(level.edges, positions);
   const solved = crossings === 0;
@@ -57,75 +64,72 @@ function App() {
         ? "пересечения"
         : "пересечений";
 
+  const updateProgress = (update: (current: PlayerProgress) => PlayerProgress) => {
+    progressChangedBeforeStorageLoad.current = true;
+    setProgress(update);
+  };
+
   useEffect(() => {
     if (!isVkApp) return;
 
     let cancelled = false;
-    let timedOut = false;
-    const timeoutId = window.setTimeout(() => {
-      timedOut = true;
-      console.warn(
-        "[VK] Запуск VK или загрузка Storage превысили тайм-аут. Используется локальный режим.",
-      );
-      setStorageWarning("Прогресс VK недоступен. Игра продолжит работу с сохранением устройства.");
-      setProgressLoaded(true);
-    }, vkRequestTimeout);
-
     const loadVkProgress = async () => {
-      let storageLoading = false;
       try {
-        const initialized = await initializeVkBridge();
-        if (cancelled || timedOut) return;
+        const initialized = await getVkBridgeInitialization();
+        if (cancelled) return;
         if (!initialized) {
+          console.warn("[VK DEBUG] Local progress fallback enabled; VK Bridge is unavailable.");
           setStorageWarning("VK недоступен. Игра продолжит работу с сохранением устройства.");
           return;
         }
 
-        storageLoading = true;
-        console.info("[VK] Начинается загрузка сохранения из VK Storage.");
-        const response = await withVkTimeout(
-          bridge.send("VKWebAppStorageGet", { keys: [progressKey] }),
-          "VKWebAppStorageGet",
-        );
-        if (cancelled || timedOut) return;
-        const savedValue = response.keys.find((item) => item.key === progressKey)?.value;
-        if (!cancelled && savedValue) {
+        const savedValue = await getVkStorageValue(progressKey);
+        if (cancelled) return;
+        if (savedValue) {
           const savedProgress = parseProgress(savedValue);
-          setProgress(savedProgress);
-          setLevelIndex(savedProgress.unlockedLevel);
-          setPositions(generateLevel(savedProgress.unlockedLevel).initialLayout);
+          const restoredLevel = Math.max(
+            localSave.progress.unlockedLevel,
+            savedProgress.unlockedLevel,
+          );
+          setProgress((current) => ({
+            coins: progressChangedBeforeStorageLoad.current
+              ? Math.max(
+                  0,
+                  savedProgress.coins + current.coins - localSave.progress.coins,
+                )
+              : Math.max(current.coins, savedProgress.coins),
+            unlockedLevel: Math.max(current.unlockedLevel, savedProgress.unlockedLevel),
+          }));
+          if (!gameChangedBeforeStorageLoad.current) {
+            setLevelIndex(restoredLevel);
+            setPositions(generateLevel(restoredLevel).initialLayout);
+          }
         }
         if (!cancelled) {
-          console.info("[VK] Сохранение успешно загружено из VK Storage.");
           setVkStorageReady(true);
           setStorageWarning(null);
         }
-      } catch (error) {
-        if (storageLoading) {
-          console.error(
-            "[VK] Ошибка загрузки VK Storage. Используется локальное сохранение.",
-            error instanceof Error ? error.name : "Unknown error",
-          );
-        }
-        if (!cancelled && !timedOut) {
-          setStorageWarning("Прогресс VK недоступен. Игра продолжится с сохранением устройства.");
-        }
-      } finally {
-        window.clearTimeout(timeoutId);
-        if (!cancelled && !timedOut) setProgressLoaded(true);
+      } catch {
+        console.warn("[VK DEBUG] Local progress fallback enabled after VK Storage failure.");
+        setStorageWarning("Прогресс VK недоступен. Игра продолжит работу с сохранением устройства.");
       }
     };
 
-    void loadVkProgress();
+    void loadVkProgress().catch((error: unknown) => {
+      console.error(
+        "[VK DEBUG] Unexpected error while loading VK progress.",
+        error instanceof Error ? error.name : "Unknown error",
+      );
+      if (!cancelled) {
+        setStorageWarning("Прогресс VK недоступен. Игра продолжит работу с сохранением устройства.");
+      }
+    });
     return () => {
       cancelled = true;
-      window.clearTimeout(timeoutId);
     };
-  }, [isVkApp]);
+  }, [isVkApp, localSave.progress]);
 
   useEffect(() => {
-    if (!progressLoaded) return;
-
     try {
       window.localStorage.setItem(progressKey, JSON.stringify(progress));
     } catch (error) {
@@ -134,36 +138,29 @@ function App() {
     }
 
     if (isVkApp && vkStorageReady) {
-      console.info("[VK] Начинается сохранение прогресса в VK Storage.");
-      void withVkTimeout(
-        bridge.send("VKWebAppStorageSet", { key: progressKey, value: JSON.stringify(progress) }),
-        "VKWebAppStorageSet",
-      )
+      void setVkStorageValue(progressKey, JSON.stringify(progress))
         .then(() => setStorageWarning(null))
-        .catch((error: unknown) => {
-          console.error(
-            "[VK] Ошибка сохранения прогресса в VK Storage.",
-            error instanceof Error ? error.name : "Unknown error",
-          );
+        .catch(() => {
           setStorageWarning("Не удалось синхронизировать прогресс с VK.");
         });
     }
-  }, [isVkApp, progress, progressLoaded, vkStorageReady]);
+  }, [isVkApp, progress, vkStorageReady]);
 
   useEffect(() => {
-    if (!progressLoaded || !solved || rewardedLevel.current === levelIndex) return;
+    if (!solved || rewardedLevel.current === levelIndex) return;
     rewardedLevel.current = levelIndex;
     if (levelIndex < progress.unlockedLevel) return;
 
     const reward = rewardForLevel(levelIndex);
-    setProgress((current) => ({
+    updateProgress((current) => ({
       coins: current.coins + reward,
       unlockedLevel: Math.max(current.unlockedLevel, levelIndex + 1),
     }));
     setNotice(`Уровень пройден — +${reward} ✦`);
-  }, [levelIndex, progress.unlockedLevel, progressLoaded, solved]);
+  }, [levelIndex, progress.unlockedLevel, solved]);
 
   const restartLevel = () => {
+    gameChangedBeforeStorageLoad.current = true;
     setPositions(level.initialLayout.map((point) => ({ ...point })));
     setMoves(0);
     setActiveNode(null);
@@ -171,6 +168,7 @@ function App() {
   };
 
   const startNextLevel = () => {
+    gameChangedBeforeStorageLoad.current = true;
     const nextLevelIndex = levelIndex + 1;
     setLevelIndex(nextLevelIndex);
     setPositions(generateLevel(nextLevelIndex).initialLayout);
@@ -181,6 +179,7 @@ function App() {
 
   const moveNode = (event: PointerEvent<SVGSVGElement>) => {
     if (activeNode === null) return;
+    gameChangedBeforeStorageLoad.current = true;
     const bounds = event.currentTarget.getBoundingClientRect();
     const nextPoint = {
       x: Math.max(0.06, Math.min(0.94, (event.clientX - bounds.left) / bounds.width)),
@@ -231,7 +230,7 @@ function App() {
       return;
     }
     if (moveHintNode()) {
-      setProgress((current) => ({ ...current, coins: current.coins - hintCost }));
+      updateProgress((current) => ({ ...current, coins: current.coins - hintCost }));
       setNotice(`Подсказка использована: −${hintCost} ✦`);
     }
   };
@@ -255,7 +254,7 @@ function App() {
         bridge.send("VKWebAppShowNativeAds", { ad_format: "reward" }),
         "VKWebAppShowNativeAds",
       );
-      setProgress((current) => ({ ...current, coins: current.coins + rewardedAdCoins }));
+      updateProgress((current) => ({ ...current, coins: current.coins + rewardedAdCoins }));
       setNotice(`За просмотр начислено +${rewardedAdCoins} ✦`);
     } catch (error) {
       console.error(
@@ -356,6 +355,7 @@ function App() {
                   const delta = deltas[event.key];
                   if (!delta) return;
                   event.preventDefault();
+                  gameChangedBeforeStorageLoad.current = true;
                   setPositions((current) =>
                     current.map((position, nodeIndex) =>
                       nodeIndex === index
